@@ -1,10 +1,3 @@
-¡Buena pregunta! 🎯
-Como tu equipo no necesita ver el detalle técnico de código ni fórmulas de Python, el **README** debe ser **claro, breve y orientado a negocio**, usando ejemplos sencillos y gráficos si es posible.
-
-Aquí te sugiero una estructura que puedes usar:
-
----
-
 # 💰 Calculadora de Bonificaciones VE Group
 
 ## 📌 Propósito
@@ -74,7 +67,3 @@ La bonificación se obtiene a partir de **cuatro factores principales**:
 * Transparencia: todos saben cómo se calcula.
 * Flexibilidad: se pueden ajustar parámetros según políticas internas.
 * Simplicidad: no necesitas conocimientos técnicos para entender tu bono.
-
----
-
-¿Quieres que te lo prepare ya en formato **README.md** con estilo claro (Markdown) para pegar directo en tu repositorio?
