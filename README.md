@@ -19,7 +19,7 @@ La bonificación se obtiene a partir de **cuatro factores principales**:
 
    * Al 80% de la meta, la bonificación parte de un **50% del salario**.
    * A medida que se acerca al 100% de la meta, este porcentaje crece hasta el **100% del salario**.
-   * Si se supera el 100% de la meta, cada **1% extra de ventas** suma un **+3% de salario adicional** en la bonificación.
+   * Si se supera el 100% de la meta, cada **1% extra de ventas** suma un **+2% de salario adicional** en la bonificación.
 
 3. **Antigüedad**
 
