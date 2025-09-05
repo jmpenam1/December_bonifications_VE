@@ -1,15 +1,8 @@
 # app.py — Calculadora de Bonificaciones de Fin de Año (VE Group)
 # ---------------------------------------------------------------
-# Nueva lógica con soporte multi-moneda (USD/COP) según especificaciones:
-# - CSV mínimo: Name, Salary, Currency (USD/COP), HireDate, Performance (0-1).
-# - Ventas alcanzadas: input manual (USD) para todo el año.
-# - Meta anual y umbral (80% por defecto) con curva de bono parametrizable:
-#   * En el umbral: start_pct (ej. 50% del salario)
-#   * En 100%: pct_100 (ej. 100% del salario)
-#   * >100%: por cada +1% add inc_pp_over_100 (ej. +3pp)
-# - Antigüedad: 1.0 si HireDate <= 2025-01-01; si no, proporcional hasta 2025-12-31.
-# - Bonificación = Salary * TenureFactor * Performance * %BonoPorVentas (en la misma moneda de Salary).
-# - UI: Cargar CSV o ingreso manual; agrupar y mostrar KPIs por Currency.
+# Multi-moneda (USD/COP) + cálculo automático (sin botón) + KPIs inmediatos.
+# Corrección del error de groupby(Currency): evitamos columnas duplicadas y
+# garantizamos que `Currency` sea 1D (Serie) y en mayúsculas.
 
 import io
 import json
@@ -31,7 +24,7 @@ st.set_page_config(
 )
 
 st.title("💰 Calculadora de Bonificaciones de Fin de Año — VE Group")
-st.caption("Soporta USD y COP • Reglas parametrizables • Transparente y auditable")
+st.caption("Soporta USD y COP • Reglas parametrizables • Cálculo automático • Transparente y auditable")
 
 # ---------------------------
 # Utilidades y plantilla
@@ -42,9 +35,9 @@ def plantilla_empleados() -> pd.DataFrame:
     data = {
         "Name": ["Ana Pérez", "Luis Gómez", "María Ruiz"],
         "Salary": [3_500_000, 2_800, 4_000_000],
-        "Currency": ["COP", "USD", "COP"],  # Nueva columna
+        "Currency": ["COP", "USD", "COP"],
         "HireDate": ["2024-02-10", "2025-05-15", "2023-11-03"],
-        "Performance": [0.85, 0.90, 0.80],  # 0-1
+        "Performance": [0.85, 0.90, 0.80],
     }
     return pd.DataFrame(data)
 
@@ -84,6 +77,10 @@ def bonus_pct_by_sales(ratio: float, threshold: float, start_pct: float, pct_100
         pct = min(pct, cap_pct)
     return max(0.0, pct)
 
+
+def dedupe_columns(df: pd.DataFrame) -> pd.DataFrame:
+    # Elimina duplicados por nombre conservando la primera aparición
+    return df.loc[:, ~df.columns.duplicated()].copy()
 
 # ---------------------------
 # Sidebar — Parámetros
@@ -130,9 +127,9 @@ st.subheader("1) Datos de empleados")
 left, right = st.columns([2, 1])
 with left:
     uploaded = st.file_uploader(
-    "Sube un CSV con columnas: Name, Salary, Currency (USD/COP), HireDate, Performance",
-    type=["csv"]
-)
+        "Sube un CSV con columnas: Name, Salary, Currency (USD/COP), HireDate, Performance",
+        type=["csv"]
+    )
 with right:
     tpl = plantilla_empleados()
     st.write("Plantilla de ejemplo:")
@@ -161,23 +158,30 @@ with manual_tab:
         {"Name": m_name, "Salary": m_salary, "Currency": m_currency, "HireDate": m_hire, "Performance": m_perf}
     ])
 
-# Selección de fuente de datos
+# Selección de fuente de datos (con fallback al manual)
 if uploaded is not None:
     df_raw = pd.read_csv(uploaded)
 else:
     df_raw = df_manual.copy()
 
-# Normalización
+# Normalización y saneo
 if "HireDate" in df_raw.columns:
     df_raw["HireDate"] = pd.to_datetime(df_raw["HireDate"], errors="coerce").dt.date
 
+# Forzar `Currency` como texto en mayúsculas
+if "Currency" in df_raw.columns:
+    df_raw["Currency"] = df_raw["Currency"].astype(str).str.upper().str.strip()
+else:
+    df_raw["Currency"] = "COP"
+
+# Garantizar columnas mínimas
 expected_cols = ["Name", "Salary", "Currency", "HireDate", "Performance"]
 missing = [c for c in expected_cols if c not in df_raw.columns]
 if missing:
     st.warning(f"Faltan columnas mínimas: {missing}")
 
 # ---------------------------
-# Cálculo
+# Cálculo (automático)
 # ---------------------------
 
 def compute(df: pd.DataFrame, pol: Dict[str, Any]) -> pd.DataFrame:
@@ -187,7 +191,6 @@ def compute(df: pd.DataFrame, pol: Dict[str, Any]) -> pd.DataFrame:
         salary = float(r.get("Salary", 0) or 0)
         perf = float(r.get("Performance", 0) or 0)
         hdate = r.get("HireDate")
-        curr = str(r.get("Currency", "")).upper() or "COP"
         tf = tenure_factor(hdate)
         bonus_pct = bonus_pct_by_sales(
             ratio=ratio,
@@ -202,89 +205,88 @@ def compute(df: pd.DataFrame, pol: Dict[str, Any]) -> pd.DataFrame:
             "TenureFactor": round(tf, 4),
             "%BonusBySales": round(bonus_pct, 4),
             "BonusAmount": round(bonus_amount, 2),
-            "Currency": curr,
         })
     res = pd.concat([df.reset_index(drop=True), pd.DataFrame(out_rows)], axis=1)
-    # Asegurar columna Currency final (por si faltaba en input)
-    if "Currency" not in df.columns:
-        res["Currency"] = res["Currency"].fillna("COP")
+    # Quitar columnas duplicadas y asegurar Currency 1D
+    res = dedupe_columns(res)
+    if "Currency" in res.columns:
+        res["Currency"] = res["Currency"].astype(str).str.upper().str.strip()
+    else:
+        res["Currency"] = "COP"
     return res
 
-st.subheader("2) Resultados")
-if st.button("🚀 Calcular bonificaciones"):
-    df_calc = compute(df_raw, policy)
+# Ejecutar cálculo SIEMPRE (sin botón)
+df_calc = compute(df_raw, policy)
 
-    # KPIs globales de cumplimiento
-    k1, k2, k3 = st.columns(3)
-    k1.metric("Ventas alcanzadas (USD)", f"${policy['achieved_amount']:,.0f}")
-    k2.metric("Meta (USD)", f"${policy['target_amount']:,.0f}")
-    percent = (policy['achieved_amount']/policy['target_amount']*100 if policy['target_amount'] else 0)
-    k3.metric("% Cumplimiento", f"{percent:.2f}%")
+# ---------------------------
+# KPIs inmediatos
+# ---------------------------
+percent = (policy['achieved_amount'] / policy['target_amount'] * 100.0) if policy['target_amount'] else 0.0
+k0, k1, k2, k3 = st.columns(4)
+k0.metric("% de meta alcanzada", f"{percent:.2f}%")
+k1.metric("Ventas alcanzadas (USD)", f"${policy['achieved_amount']:,.0f}")
+k2.metric("Meta (USD)", f"${policy['target_amount']:,.0f}")
+k3.metric("Empleados", int(df_calc.shape[0]))
 
-    # KPIs por moneda
-    st.markdown("### KPIs por moneda")
-    if "Currency" in df_calc.columns:
-        grp = df_calc.groupby("Currency").agg(
-            Empleados=("Name", "count"),
-            BonoTotal=("BonusAmount", "sum"),
-            BonoPromedio=("BonusAmount", "mean")
-        ).reset_index()
-        st.dataframe(grp, use_container_width=True, hide_index=True)
-    else:
-        st.info("No hay columna Currency para agrupar.")
+# KPIs por moneda
+st.markdown("### KPIs por moneda")
+try:
+    grp = df_calc.groupby("Currency", as_index=False).agg(
+        Empleados=("Name", "count"),
+        BonoTotal=("BonusAmount", "sum"),
+        BonoPromedio=("BonusAmount", "mean")
+    )
+    st.dataframe(grp, use_container_width=True, hide_index=True)
+except Exception as e:
+    st.error(f"No se pudo agrupar por Currency: {e}")
 
-    st.dataframe(df_calc, use_container_width=True)
+st.dataframe(df_calc, use_container_width=True)
 
-    # ---------------------------
-    # Visualizaciones
-    # ---------------------------
-    st.subheader("3) Visualizaciones")
+# ---------------------------
+# Visualizaciones
+# ---------------------------
+st.subheader("3) Visualizaciones")
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown("**Curva de % de Bono vs % de Meta**")
-        xs = np.linspace(0, 1.3, 131)
-        ys = [bonus_pct_by_sales(x, policy["threshold"], policy["start_pct"], policy["pct_100"], policy["inc_pp_over_100"], policy["cap_pct"]) for x in xs]
-        fig, ax = plt.subplots(figsize=(6,4))
-        ax.plot(xs*100, np.array(ys)*100)
-        ax.axvline((percent), linestyle='--')
-        ax.set_xlabel("% de meta alcanzada")
-        ax.set_ylabel("% de bono sobre salario")
-        ax.set_title("Regla de bonificación por cumplimiento")
-        st.pyplot(fig)
+c1, c2 = st.columns(2)
+with c1:
+    st.markdown("**Curva de % de Bono vs % de Meta**")
+    xs = np.linspace(0, 1.3, 131)
+    ys = [bonus_pct_by_sales(x, policy["threshold"], policy["start_pct"], policy["pct_100"], policy["inc_pp_over_100"], policy["cap_pct"]) for x in xs]
+    fig, ax = plt.subplots(figsize=(6,4))
+    ax.plot(xs*100, np.array(ys)*100)
+    ax.axvline(percent, linestyle='--')
+    ax.set_xlabel("% de meta alcanzada")
+    ax.set_ylabel("% de bono sobre salario")
+    ax.set_title("Regla de bonificación por cumplimiento")
+    st.pyplot(fig)
 
-    with c2:
-        st.markdown("**Distribución de Bonos por moneda**")
-        if "Currency" in df_calc.columns:
-            for curr in df_calc["Currency"].unique():
-                sub = df_calc[df_calc["Currency"] == curr]
-                fig2, ax2 = plt.subplots(figsize=(6,4))
-                sub["BonusAmount"].plot(kind="hist", bins=10, ax=ax2)
-                ax2.set_xlabel(f"Bono ({curr})")
-                ax2.set_title(f"Distribución del Bono — {curr}")
-                st.pyplot(fig2)
-        else:
-            st.info("No hay columna Currency para graficar.")
+with c2:
+    st.markdown("**Distribución de Bonos por moneda**")
+    for curr in df_calc["Currency"].dropna().unique():
+        sub = df_calc[df_calc["Currency"] == curr]
+        fig2, ax2 = plt.subplots(figsize=(6,4))
+        sub["BonusAmount"].plot(kind="hist", bins=10, ax=ax2)
+        ax2.set_xlabel(f"Bono ({curr})")
+        ax2.set_title(f"Distribución del Bono — {curr}")
+        st.pyplot(fig2)
 
-    c3, c4 = st.columns(2)
-    with c3:
-        st.markdown("**Top 10 Bonos (global)**")
-        cols_show = [c for c in ["Name", "Salary", "Currency", "TenureFactor", "Performance", "%BonusBySales", "BonusAmount"] if c in df_calc.columns]
-        st.dataframe(df_calc.sort_values("BonusAmount", ascending=False).head(10)[cols_show], use_container_width=True, hide_index=True)
+c3, c4 = st.columns(2)
+with c3:
+    st.markdown("**Top 10 Bonos (global)**")
+    cols_show = [c for c in ["Name", "Salary", "Currency", "TenureFactor", "Performance", "%BonusBySales", "BonusAmount"] if c in df_calc.columns]
+    st.dataframe(df_calc.sort_values("BonusAmount", ascending=False).head(10)[cols_show], use_container_width=True, hide_index=True)
 
-    with c4:
-        st.markdown("**Indicador de cumplimiento**")
-        st.progress(min(1.0, max(0.0, percent/100)))
-        st.write(f"Cumplimiento actual: **{percent:.2f}%**")
+with c4:
+    st.markdown("**Indicador de cumplimiento**")
+    st.progress(min(1.0, max(0.0, percent/100)))
+    st.write(f"Cumplimiento actual: **{percent:.2f}%**")
 
-    # ---------------------------
-    # Exportación
-    # ---------------------------
-    st.subheader("4) Exportar")
-    csv_bytes = df_calc.to_csv(index=False).encode("utf-8")
-    st.download_button("⬇️ CSV de resultados", data=csv_bytes, file_name="bonos_resultados.csv", mime="text/csv")
-else:
-    st.info("Configura parámetros, carga tus datos o usa ingreso manual y pulsa **Calcular bonificaciones**.")
+# ---------------------------
+# Exportación
+# ---------------------------
+st.subheader("4) Exportar")
+csv_bytes = df_calc.to_csv(index=False).encode("utf-8")
+st.download_button("⬇️ CSV de resultados", data=csv_bytes, file_name="bonos_resultados.csv", mime="text/csv")
 
 # ---------------------------
 # Ayuda
