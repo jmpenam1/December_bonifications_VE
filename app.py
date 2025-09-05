@@ -129,7 +129,10 @@ st.sidebar.download_button(
 st.subheader("1) Datos de empleados")
 left, right = st.columns([2, 1])
 with left:
-    uploaded = st.file_uploader("Sube un CSV con columnas: Name, Salary, Currency (USD/COP), HireDate, Performance", type=["csv"]).
+    uploaded = st.file_uploader(
+    "Sube un CSV con columnas: Name, Salary, Currency (USD/COP), HireDate, Performance",
+    type=["csv"]
+)
 with right:
     tpl = plantilla_empleados()
     st.write("Plantilla de ejemplo:")
